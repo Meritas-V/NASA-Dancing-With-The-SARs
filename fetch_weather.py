@@ -107,7 +107,7 @@ def daily_table(h, d0, d1):
     return rows
 
 
-def main():
+def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--info", help="info.json written by process_pair.py (gives both pass times and the map corners)")
     ap.add_argument("--before", help="override: before pass time, e.g. 2025-11-12T03:13")
@@ -115,10 +115,10 @@ def main():
     ap.add_argument("--point", action="append", default=[], help='"name:lat,lon" (repeatable)')
     ap.add_argument("--out", default="out")
     ap.add_argument("--from-json", help="debug: read a saved weather.json instead of calling the API")
-    a = ap.parse_args()
+    a = ap.parse_args(argv)
 
     tb, ta = a.before, a.after
-    default_pts = [("detail-box", 47.895, 25.38)]
+    default_pts = []
     if a.info:
         info = json.load(open(a.info))
         tb = tb or info["before"]["start"]
@@ -127,8 +127,13 @@ def main():
         lat = (c["nw"]["lat"] + c["se"]["lat"]) / 2
         lon = (c["nw"]["lon"] + c["se"]["lon"]) / 2
         default_pts.append(("window-centre", round(lat, 4), round(lon, 4)))
+        default_pts.append(("north-west corner", round(c["nw"]["lat"], 4), round(c["nw"]["lon"], 4)))
+        default_pts.append(("south-east corner", round(c["se"]["lat"], 4), round(c["se"]["lon"], 4)))
     if not tb or not ta:
         print("Give --info out\\overview\\info.json, or both --before and --after.")
+        sys.exit(1)
+    if not default_pts and not a.point:
+        print("Give --info (the scene's info.json) or at least one --point name:lat,lon.")
         sys.exit(1)
     t_b = datetime.fromisoformat(tb[:16])
     t_a = datetime.fromisoformat(ta[:16])

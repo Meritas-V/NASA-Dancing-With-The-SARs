@@ -52,6 +52,27 @@ def read_ident(f):
     }
 
 
+def check_gcov(f, label):
+    """Return a list of plain-language problems that stop this file from being used (empty list = fine)."""
+    out = []
+    kind = ""
+    try:
+        for k in ("productType", "productSpecificationVersion"):
+            pass
+        kind = str(dec(f[IDENT]["productType"][()]))
+    except Exception:
+        pass
+    if GRID not in f:
+        what = f"it is a {kind} product" if kind and kind != "GCOV" else "it has no frequency A grid (an S-band, frequency-B-only or non-GCOV file)"
+        out.append(f"{label}: {what}. This tool reads L-band GCOV files (name contains _GCOV_) with frequency A.")
+        return out
+    g = f[GRID]
+    for need in ("HHHH", "HVHV", "mask", "xCoordinates", "yCoordinates", "projection"):
+        if need not in g:
+            out.append(f"{label}: layer {need} is missing. The tool needs a dual-polarised HH/HV GCOV file.")
+    return out
+
+
 def read_axes(f):
     g = f[GRID]
     return g["xCoordinates"][()], g["yCoordinates"][()], int(dec(g["projection"][()]))
@@ -140,6 +161,14 @@ def main(argv=None):
 
     fb = h5py.File(a.before, "r")
     fa = h5py.File(a.after, "r")
+
+    # ---- 0. IS EACH FILE A USABLE GCOV FILE?
+    bad = check_gcov(fb, "BEFORE file (" + os.path.basename(a.before) + ")") + check_gcov(fa, "AFTER file (" + os.path.basename(a.after) + ")")
+    if bad:
+        print("CANNOT USE THESE FILES:")
+        for m in bad:
+            print("  -", m)
+        sys.exit(5)
 
     # ---- 1. SAFETY CHECK
     ib, ia = read_ident(fb), read_ident(fa)

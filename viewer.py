@@ -30,6 +30,11 @@ from pyproj import Transformer
 
 import process_pair as pp   # same stretch / colour code as the command-line tool
 
+def app_dir():
+    """Folder for data the app creates (out/, cache/): next to the .exe when packaged, else the working folder."""
+    return Path(sys.executable).parent if getattr(sys, "frozen", False) else Path.cwd()
+
+
 pg.setConfigOptions(imageAxisOrder="row-major", antialias=False)
 
 LAYERS = [
@@ -112,7 +117,7 @@ class Results:
         return self._vals[key]
 
     def _find_weather(self):
-        for p in (self.folder / "weather.json", self.folder.parent / "weather.json", Path.cwd() / "out" / "weather.json"):
+        for p in (self.folder / "weather.json", self.folder.parent / "weather.json", app_dir() / "out" / "weather.json"):
             if p.exists():
                 try:
                     return json.loads(p.read_text())
@@ -217,6 +222,28 @@ class Worker(QtCore.QThread):
         self.done.emit(ok, self.outdir)
 
 
+class WeatherFetcher(QtCore.QThread):
+    """Runs fetch_weather.main in the background and reports success."""
+    done = QtCore.Signal(bool, str)
+
+    def __init__(self, argv):
+        super().__init__()
+        self.argv = argv
+
+    def run(self):
+        import fetch_weather as fw
+        buf = io.StringIO()
+        ok = True
+        try:
+            with contextlib.redirect_stdout(buf):
+                fw.main(self.argv)
+        except SystemExit as e:
+            ok = e.code in (0, None)
+        except Exception:
+            buf.write(traceback.format_exc()); ok = False
+        self.done.emit(ok, buf.getvalue())
+
+
 def file_date_key(path):
     """Start time inside a NISAR filename (first 8-digit date + time), used to tell BEFORE from AFTER."""
     m = re.search(r"_(\d{8}T\d{6})_", Path(path).name)
@@ -255,7 +282,7 @@ class ProcessDialog(QtWidgets.QDialog):
         self.block = QtWidgets.QSpinBox(); self.block.setRange(1, 20); self.block.setValue(4)
         self.block.setToolTip("Average NxN pixels. 20 m x N. Higher = cleaner and faster, lower = sharper but noisier.")
         self.name = QtWidgets.QLineEdit("overview")
-        self.outroot = QtWidgets.QLineEdit(str(Path.cwd() / "out"))
+        self.outroot = QtWidgets.QLineEdit(str(app_dir() / "out"))
         form.addRow("Block size (px)", self.block)
         form.addRow("Result name", self.name)
         form.addRow("Output folder", self._with_browse(self.outroot, "dir"))
@@ -508,6 +535,9 @@ def ribbon_icon(kind, size=48):
             p.drawLine(P(x, y), P(x + 10 * dx, y)); p.drawLine(P(x, y), P(x, y + 10 * dy))
     elif kind == "frame":
         pen.setStyle(QtCore.Qt.DashLine); p.setPen(pen); p.drawRect(R(9, 11, 30, 26))
+    elif kind == "weather":
+        p.drawEllipse(R(14, 8, 14, 14)); p.drawArc(R(8, 20, 32, 16), 20 * 16, 140 * 16)
+        p.drawLine(P(14, 40), P(12, 44)); p.drawLine(P(23, 40), P(21, 44)); p.drawLine(P(32, 40), P(30, 44))
     elif kind == "terms":
         p.drawRoundedRect(R(11, 7, 26, 34), 3 * u, 3 * u)
         for y in (17, 24, 31):
@@ -834,8 +864,7 @@ class WeatherPanel(QtWidgets.QWidget):
         if not (res and res.weather):
             hint = str(res.folder / "info.json") if res else "out\\overview\\info.json"
             self.cards.add("No weather data yet",
-                           "Weather helps explain radar changes. Run this once in a terminal, then reopen the results:<br><br>"
-                           "<code>python fetch_weather.py --info " + hint + "</code>")
+                           "Weather helps explain radar changes. Press <b>Weather</b> in the toolbar to download temperature, rain and snow for this scene (needs internet; about a minute).")
             return
         pl = res.weather["places"].get(self.place.currentText())
         if not pl or not pl.get("daily"):
@@ -1464,7 +1493,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.help_win = None
         self.base_cache = {}
         self.base_worker = None
-        self.cache_dir = Path.cwd() / "cache" / "tiles" / "eox_s2cloudless_2024"
+        self.cache_dir = app_dir() / "cache" / "tiles" / "eox_s2cloudless_2024"
 
         # ---- left: picture, slider (same width as the picture), dates, attribution
         self.view = ImageView()
@@ -1593,6 +1622,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.frame_act = tool("frame", "Frame", "Show or hide the outline of the picture", self.toggle_frame, checkable=True)
         self.frame_act.setChecked(True)
         self.ribbon.addSeparator()
+        tool("weather", "Weather", "Download temperature, rain and snow for this scene", self.fetch_weather)
         tool("terms", "Terms", "Short glossary of the terms used", lambda: self.open_help("terms"))
         tool("help", "Guide", "Guide, explanations and sources", lambda: self.open_help(), "F1")
         self.layer.currentIndexChanged.connect(self.rebuild)
@@ -1611,7 +1641,7 @@ class MainWindow(QtWidgets.QMainWindow):
     # ---- loading
     def open_dialog(self):
         p = QtWidgets.QFileDialog.getExistingDirectory(self, "Open a results folder (contains info.json)",
-                                                       str(Path.cwd() / "out"))
+                                                       str(app_dir() / "out"))
         if p:
             self.load(p)
 
@@ -1624,6 +1654,31 @@ class MainWindow(QtWidgets.QMainWindow):
         p, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save view", "sar_view.png", "PNG (*.png)")
         if p:
             self.view.grab().save(p)
+
+    def fetch_weather(self):
+        if not self.res:
+            QtWidgets.QMessageBox.information(self, "Weather", "Open or process a scene first.")
+            return
+        if getattr(self, "_wf", None) and self._wf.isRunning():
+            return
+        info = self.res.folder / "info.json"
+        argv = ["--info", str(info), "--out", str(self.res.folder.parent)]
+        self._wprog = QtWidgets.QProgressDialog("Downloading weather (Open-Meteo / ERA5)...", None, 0, 0, self)
+        self._wprog.setWindowTitle("Weather"); self._wprog.setMinimumDuration(0); self._wprog.setModal(True); self._wprog.show()
+        self._wf = WeatherFetcher(argv)
+        self._wf.done.connect(self._weather_done)
+        self._wf.start()
+
+    def _weather_done(self, ok, log):
+        self._wprog.close()
+        if ok and self.res:
+            self.res.weather = self.res._find_weather()
+            self.weather.set_results(self.res)
+            self.tabs.setCurrentWidget(self.weather)
+        else:
+            tail = "\n".join(log.strip().splitlines()[-4:])
+            QtWidgets.QMessageBox.warning(self, "Weather could not be downloaded",
+                                          "Check the internet connection and try again.\n\n" + tail)
 
     def toggle_frame(self, on):
         self.view.frame.setVisible(bool(on))
