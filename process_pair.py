@@ -9,7 +9,7 @@ What it does, step by step (each step is a labelled block below):
                       If not, the pixels do not line up and any "change" would be nonsense -> we stop.
   2. WINDOW         - convert your lon/lat box to UTM metres, then to pixel rows/cols. Only that window is read
                       from disk (a full layer is 1.3 GB; the window is a few MB to ~150 MB).
-  3. MASK           - keep only pixels the file marks as valid (mask 1..254). 0 = invalid, 255 = outside footprint.
+  3. MASK           - keep only pixels the file marks as valid (mask 1..5 = sub-swath number of fully focused data). 0 = invalid or partially focused, 255 = outside footprint (spec JPL D-102274 Rev E, sec. 4.3.3).
   4. BLOCK AVERAGE  - average block x block pixels in LINEAR power (never average dB!), valid pixels only.
   5. dB             - 10*log10(power). Radar brightness spans orders of magnitude, so we use a log scale.
   6. CHANGE         - after_dB - before_dB. Then subtract the median shift so a regional brightness offset
@@ -99,14 +99,17 @@ def save_rgb(hh, hv, ok, r_hh, r_hv, r_ratio, path):
     save_rgba(np.dstack([r, g, b]), ok, path)
 
 
-def save_change(ch, ok, clip, path):
+def change_rgb(ch, clip):
     """Diverging colours: blue = got darker (less backscatter), white = no change, red = got brighter."""
     t = np.clip(np.nan_to_num(ch / clip, nan=0.0), -1, 1)[..., None]
     white = np.array([255, 255, 255], float)
     blue = np.array([20, 80, 210], float)
     red = np.array([210, 40, 30], float)
-    rgb = np.where(t < 0, white * (1 + t) + blue * (-t), white * (1 - t) + red * t)
-    save_rgba(rgb.astype(np.uint8), ok, path)
+    return np.where(t < 0, white * (1 + t) + blue * (-t), white * (1 - t) + red * t).astype(np.uint8)
+
+
+def save_change(ch, ok, clip, path):
+    save_rgba(change_rgb(ch, clip), ok, path)
 
 
 def pct_range(a, ok, lo=2, hi=98):
@@ -118,7 +121,7 @@ def pct_range(a, ok, lo=2, hi=98):
 
 
 # ----------------------------------------------------------------------------- main
-def main():
+def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("before")
     ap.add_argument("after")
@@ -127,9 +130,10 @@ def main():
     ap.add_argument("--name", default="run", help="output subfolder name")
     ap.add_argument("--out", default="out", help="output root folder")
     ap.add_argument("--clip", type=float, default=6.0, help="change map saturates at +/- this many dB")
+    ap.add_argument("--no-png", action="store_true", help="skip the PNG previews (much faster on huge areas; the viewer does not need them)")
     ap.add_argument("--no-normalise", action="store_true", help="do not subtract the regional median shift")
     ap.add_argument("--force", action="store_true", help="continue even if track/frame/grid differ (results will be wrong)")
-    a = ap.parse_args()
+    a = ap.parse_args(argv)
 
     outdir = os.path.join(a.out, a.name)
     os.makedirs(outdir, exist_ok=True)
@@ -187,7 +191,7 @@ def main():
         g = f[GRID]
         power = g[pol][r_lo:r_hi, c_lo:c_hi]
         mask = g["mask"][r_lo:r_hi, c_lo:c_hi]
-        valid = (mask >= 1) & (mask <= 254) & np.isfinite(power) & (power > 0)
+        valid = (mask >= 1) & (mask <= 5) & np.isfinite(power) & (power > 0)
         mean, ok = block_mean(power, valid, b)
         return to_db(mean), ok
 
@@ -220,14 +224,22 @@ def main():
     ratio_all = np.concatenate([(hh_b - hv_b)[ok], (hh_a - hv_a)[ok]])
     r_ratio = pct_range(ratio_all, np.ones(ratio_all.size, bool))
     p = lambda n: os.path.join(outdir, n)
-    save_gray(hh_b, ok, *r_hh, p("hh_before.png"))
-    save_gray(hh_a, ok, *r_hh, p("hh_after.png"))
-    save_gray(hv_b, ok, *r_hv, p("hv_before.png"))
-    save_gray(hv_a, ok, *r_hv, p("hv_after.png"))
-    save_rgb(hh_b, hv_b, ok, r_hh, r_hv, r_ratio, p("rgb_before.png"))
-    save_rgb(hh_a, hv_a, ok, r_hh, r_hv, r_ratio, p("rgb_after.png"))
-    save_change(d_hh, ok, a.clip, p("change_hh.png"))
-    save_change(d_hv, ok, a.clip, p("change_hv.png"))
+    if not a.no_png:
+        save_gray(hh_b, ok, *r_hh, p("hh_before.png"))
+    if not a.no_png:
+        save_gray(hh_a, ok, *r_hh, p("hh_after.png"))
+    if not a.no_png:
+        save_gray(hv_b, ok, *r_hv, p("hv_before.png"))
+    if not a.no_png:
+        save_gray(hv_a, ok, *r_hv, p("hv_after.png"))
+    if not a.no_png:
+        save_rgb(hh_b, hv_b, ok, r_hh, r_hv, r_ratio, p("rgb_before.png"))
+    if not a.no_png:
+        save_rgb(hh_a, hv_a, ok, r_hh, r_hv, r_ratio, p("rgb_after.png"))
+    if not a.no_png:
+        save_change(d_hh, ok, a.clip, p("change_hh.png"))
+    if not a.no_png:
+        save_change(d_hv, ok, a.clip, p("change_hv.png"))
 
     np.savez_compressed(
         p("stack.npz"),

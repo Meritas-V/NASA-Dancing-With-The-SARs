@@ -5,3 +5,11 @@ out/
 .env
 config.json
 token*
+cache/
+
+.venv/
+out/
+cache/
+*.npz
+*.h5
+*.pyc
