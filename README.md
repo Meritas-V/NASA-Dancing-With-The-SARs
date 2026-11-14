@@ -28,6 +28,69 @@ Grab the zip from the **Releases** page, unzip, run `DancingWithTheSARs.exe`.
 Windows SmartScreen may warn "unknown publisher" because the exe is not code-signed:
 click *More info -> Run anyway*.
 
+## How to use it, step by step
+
+The app has no data of its own. It needs **two NISAR GCOV files** that you download once, then it processes
+them into a small result folder that it can open instantly afterwards.
+
+### 1. Get the data (free)
+
+1. Create a free **Earthdata Login** account: https://urs.earthdata.nasa.gov/users/new
+2. Open **Vertex**, the Alaska Satellite Facility (ASF) search site: https://search.asf.alaska.edu/ and sign in (top right).
+3. Set *Search Type* to **Geographic Search**, *Dataset* to **NISAR**, and *Science Product* to **GCOV (Geocoded Polarimetric Covariance)**.
+4. Draw or zoom to your area and set a date range. Press **Search**.
+5. Pick **two acquisitions of the same area** from the same **track**, **frame** and **pass direction** (ascending or descending). The earlier is "before", the later is "after".
+   NISAR's track-frame map is on the NISAR mission website. Files from different tracks or frames are refused by the app.
+6. For each one, open its file list and download the **HDF5 (.h5)** science file (the download icon under *Science Data*). Each file is about 1 GB. Keep both in one folder.
+
+Other ways to get the same files (Earthdata Search, the `asf_search` or `earthaccess` Python packages) are described in the
+ASF NISAR data guide: https://nisar-docs.asf.alaska.edu/access-overview
+
+The product is released as BETA or PROVISIONAL (data maturity), which affects how much to trust fine detail. The in-app Guide explains the known issues.
+
+### 2. Start the app
+
+- **Windows exe:** unzip the release and run `DancingWithTheSARs.exe`. Windows may show an "unknown publisher" warning; choose *More info -> Run anyway*.
+- **From source:** see "Run from source" below.
+
+The window opens empty on first start. That is normal.
+
+### 3. Process the pair
+
+Click **Process pair** (Ctrl+N) in the toolbar.
+
+| Field | What to do |
+|---|---|
+| BEFORE .h5 / AFTER .h5 | Pick the two files (or drag them in). The earlier date becomes BEFORE. |
+| Area (degrees) | The window to analyse: lon min, lat min, lon max, lat max (WGS 84). It must lie inside the files' footprint. Only this window is read from disk, so a smaller area is much faster. The fields start with a sample box; **replace it with your own area**. |
+| Block size (px) | Averages N x N pixels. One pixel is 20 m for the standard product, so 4 gives 80 m. Higher is smoother and faster, lower is sharper but noisier. |
+| Result name | Name of the result folder. |
+| Output folder | Where results are written (default: `out` next to the app). |
+
+Press **Process** and watch the log. The app first checks that both files are valid GCOV products and comparable (same track, frame, pass direction, grid).
+If not, a message says what is wrong and nothing is processed.
+
+### 4. Explore the result
+
+The result opens automatically. Open an older one any time with **Open results** (Ctrl+O).
+
+- **Views:** change map, before/after swipe, HH/HV composite, each with a legend computed from the loaded data. Zoom with the wheel, pan by dragging.
+- **Frame:** toggle the picture frame to see exactly what a screenshot will contain.
+- **Satellite photo:** tick the satellite checkbox for a Sentinel-2 basemap (internet needed); an opacity slider appears.
+- **Statistics tab:** numbers for the area.
+- **Weather:** press the Weather button to download hourly reanalysis weather for the two pass times (internet needed). It helps judge whether a change is real ground change or just wet or frozen ground.
+- **Save picture** (Ctrl+S) exports the current view. **Guide** (F1) explains every term, colour and caveat, with sources.
+
+### 5. What happens to your data
+
+1. Only the selected window is read from the two HDF5 files.
+2. Pixels the file marks invalid are dropped (only mask values 1 to 5 are used).
+3. Power is averaged over each block in **linear** units, then converted to decibels (10 x log10).
+4. Change = AFTER dB minus BEFORE dB, with the regional median shift removed so that a uniform offset does not tint the whole map.
+5. Results (arrays, preview images and a small `info.json`) are saved in the output folder. Your original files are never modified.
+
+Everything runs on your computer. The only internet use is the optional basemap tiles and weather.
+
 ## Run from source
 
 Python 3.10 or newer.
@@ -39,22 +102,12 @@ pip install -r requirements.txt
 python viewer.py
 ```
 
-1. **Process pair** (Ctrl+N): choose the BEFORE and AFTER `.h5` files and a lon/lat box.
-2. **Open results** (Ctrl+O) opens an earlier result folder.
-3. **Weather** downloads reanalysis weather for the two pass times (needs internet).
-
-Command-line equivalent:
+Then follow the steps above. Command-line equivalent of "Process pair":
 
 ```powershell
 python process_pair.py BEFORE.h5 AFTER.h5 --bbox LON_MIN LAT_MIN LON_MAX LAT_MAX --block 4 --name myrun
 python viewer.py out\myrun
 ```
-
-## Getting NISAR data
-
-NISAR GCOV files are free from the ASF DAAC (NASA Earthdata login required):
-https://search.asf.alaska.edu/ (dataset: NISAR, product: GCOV). Files are large (about 1 GB each);
-the app reads only the window you select.
 
 ## Build the exe yourself
 
