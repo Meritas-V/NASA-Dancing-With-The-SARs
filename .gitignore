@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.h5
+out/
+.env
+config.json
+token*
